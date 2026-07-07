@@ -491,6 +491,18 @@ int usbi_get_config_index_by_value(struct libusb_device *dev,
 
 void usbi_connect_device (struct libusb_device *dev);
 void usbi_disconnect_device (struct libusb_device *dev);
+/* Add device to ctx->usb_devs without emitting a hotplug notification. Used
+ * by backends that drive hotplug themselves (e.g. windows hotplug backend):
+ * usbi_alloc_device() skips usbi_connect_device() when hotplug is enabled, so
+ * the backend must call usbi_attach_device() to make the device visible in
+ * ctx->usb_devs, then emit LIBUSB_HOTPLUG_EVENT_DEVICE_ARRIVED via
+ * usbi_hotplug_notification() when appropriate. */
+void usbi_attach_device (struct libusb_device *dev);
+
+/* Forward decl for hotplug backends that need to enumerate devices. */
+struct discovered_devs;
+struct discovered_devs *discovered_devs_alloc(void);
+void discovered_devs_free(struct discovered_devs *discdevs);
 
 #if (defined(OS_WINDOWS) || defined(OS_WINCE)) && !defined(__GNUC__)
 #define snprintf _snprintf
@@ -554,6 +566,8 @@ struct discovered_devs {
 
 struct discovered_devs *discovered_devs_append(
 	struct discovered_devs *discdevs, struct libusb_device *dev);
+
+void discovered_devs_free(struct discovered_devs *discdevs);
 
 /* OS abstraction */
 

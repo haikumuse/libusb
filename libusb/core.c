@@ -603,7 +603,7 @@ libusb_free_device_list(list, 1);
  * itself. */
 #define DISCOVERED_DEVICES_SIZE_STEP 8
 
-static struct discovered_devs *discovered_devs_alloc(void)
+struct discovered_devs *discovered_devs_alloc(void)
 {
 	struct discovered_devs *ret =
 		malloc(sizeof(*ret) + (sizeof(void *) * DISCOVERED_DEVICES_SIZE_STEP));
@@ -644,7 +644,7 @@ struct discovered_devs *discovered_devs_append(
 	return discdevs;
 }
 
-static void discovered_devs_free(struct discovered_devs *discdevs)
+void discovered_devs_free(struct discovered_devs *discdevs)
 {
 	size_t i;
 
@@ -700,6 +700,20 @@ void usbi_connect_device(struct libusb_device *dev)
 	if (libusb_has_capability(LIBUSB_CAP_HAS_HOTPLUG) && dev->ctx->hotplug_msgs.next) {
 		usbi_hotplug_notification(ctx, dev, LIBUSB_HOTPLUG_EVENT_DEVICE_ARRIVED);
 	}
+}
+
+/* Add device to ctx->usb_devs without emitting a hotplug notification.
+ * Counterpart of usbi_connect_device() for backends that drive hotplug
+ * themselves. Mirrors libusb-windows-hotplug's usbi_attach_device(). */
+void usbi_attach_device(struct libusb_device *dev)
+{
+	struct libusb_context *ctx = DEVICE_CTX(dev);
+
+	dev->attached = 1;
+
+	usbi_mutex_lock(&ctx->usb_devs_lock);
+	list_add(&dev->list, &ctx->usb_devs);
+	usbi_mutex_unlock(&ctx->usb_devs_lock);
 }
 
 void usbi_disconnect_device(struct libusb_device *dev)
@@ -2196,9 +2210,29 @@ int usbi_gettimeofday(struct timeval *tp, void *tzp)
 }
 #endif
 
+/* Global log callback — when set (via libusb_set_log_cb with
+ * LIBUSB_LOG_CB_GLOBAL mode), all libusb log messages are routed here instead
+ * of the platform default (OutputDebugStringW / stderr). This lets the host
+ * application (e.g. PXView) capture libusb debug output into its own logging
+ * system without depending on stderr being visible. */
+static libusb_log_cb g_global_log_cb = NULL;
+
+void LIBUSB_CALL libusb_set_log_cb(libusb_context *ctx, libusb_log_cb cb, int mode)
+{
+	UNUSED(ctx);
+	if (mode & LIBUSB_LOG_CB_GLOBAL)
+		g_global_log_cb = cb;
+}
+
 static void usbi_log_str(struct libusb_context *ctx,
 	enum libusb_log_level level, const char * str)
 {
+	/* Prefer the global application log callback if registered. */
+	if (g_global_log_cb) {
+		g_global_log_cb(ctx, level, str);
+		return;
+	}
+
 #if defined(USE_SYSTEM_LOGGING_FACILITY)
 #if defined(OS_WINDOWS) || defined(OS_WINCE)
 	/* Windows CE only supports the Unicode version of OutputDebugString. */

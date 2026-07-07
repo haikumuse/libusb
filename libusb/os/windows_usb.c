@@ -37,6 +37,7 @@
 
 #include "libusbi.h"
 #include "windows_usb.h"
+#include "windows_hotplug.h"
 
 // The 2 macros below are used in conjunction with safe loops.
 #define LOOP_CHECK(fcall) { r=fcall; if (r != LIBUSB_SUCCESS) continue; }
@@ -146,7 +147,7 @@ static char* guid_to_string(const GUID* guid)
  * uses retval as errorcode, or, if 0, use GetLastError()
  */
 #if defined(ENABLE_LOGGING)
-static char *windows_error_str(uint32_t retval)
+char *windows_error_str(uint32_t retval)
 {
 static char err_string[ERR_BUFFER_SIZE];
 
@@ -1102,6 +1103,11 @@ static int windows_init(struct libusb_context *ctx)
 
 		// Create a hash table to store session ids. Second parameter is better if prime
 		htab_create(ctx, HTAB_SIZE);
+
+		// Start the hotplug event monitor (non-fatal if it fails)
+		if (windows_start_event_monitor() != LIBUSB_SUCCESS) {
+			usbi_warn(ctx, "failed to start hotplug event monitor");
+		}
 	}
 	// At this stage, either we went through full init successfully, or didn't need to
 	r = LIBUSB_SUCCESS;
@@ -1551,7 +1557,7 @@ static int set_hid_interface(struct libusb_context* ctx, struct libusb_device* d
 /*
  * get_device_list: libusb backend device enumeration function
  */
-static int windows_get_device_list(struct libusb_context *ctx, struct discovered_devs **_discdevs)
+int windows_get_device_list(struct libusb_context *ctx, struct discovered_devs **_discdevs)
 {
 	struct discovered_devs *discdevs;
 	HDEVINFO dev_info = { 0 };
@@ -1786,10 +1792,30 @@ static int windows_get_device_list(struct libusb_context *ctx, struct discovered
 						continue;
 					}
 					usbi_dbg("allocating new device for session [%X]", session_id);
-					if ((dev = usbi_alloc_device(ctx, session_id)) == NULL) {
-						LOOP_BREAK(LIBUSB_ERROR_NO_MEM);
-					}
-					windows_device_priv_init(dev);
+				if ((dev = usbi_alloc_device(ctx, session_id)) == NULL) {
+					LOOP_BREAK(LIBUSB_ERROR_NO_MEM);
+				}
+				/* In hotplug mode, usbi_alloc_device() skips
+				 * usbi_connect_device() (which would both add the device
+				 * to ctx->usb_devs and emit an ARRIVED notification).
+				 * The hotplug backend wants to control notification
+				 * timing, so we add the device to ctx->usb_devs here
+				 * without notifying; the windows hotplug backend will
+				 * emit ARRIVED events via usbi_hotplug_notification()
+				 * when WM_DEVICECHANGE arrives. */
+				usbi_attach_device(dev);
+				windows_device_priv_init(dev);
+				/* In hotplug mode, the alloc ref (refcnt=1) represents
+				 * membership in ctx->usb_devs and must NOT be unref'd —
+				 * the device must survive discovered_devs_free() to stay
+				 * in ctx->usb_devs for subsequent hotplug polls. In
+				 * non-hotplug mode, usbi_connect_device() was called
+				 * inside usbi_alloc_device(), and unref_list balances
+				 * the refcount so the device is freed when discdevs is
+				 * freed (with usbi_disconnect_device removing it from
+				 * the list on refcnt→0). */
+				if (libusb_has_capability(LIBUSB_CAP_HAS_HOTPLUG))
+					goto dont_track_unref;
 				} else {
 					usbi_dbg("found existing device for session [%X] (%d.%d)",
 						session_id, dev->bus_number, dev->device_address);
@@ -1804,6 +1830,7 @@ static int windows_get_device_list(struct libusb_context *ctx, struct discovered
 						LOOP_BREAK(LIBUSB_ERROR_NO_MEM);
 					}
 				}
+dont_track_unref:
 				priv = _device_priv(dev);
 			}
 
@@ -1935,6 +1962,9 @@ static void windows_exit(void)
 
 	// Only works if exits and inits are balanced exactly
 	if (--concurrent_usage < 0) {	// Last exit
+		// Stop the hotplug event monitor first to ensure the window thread
+		// has exited before we destroy any resources it might reference.
+		windows_stop_event_monitor();
 		for (i=0; i<USB_API_MAX; i++) {
 			usb_api_backend[i].exit(SUB_API_NOTSET);
 		}
@@ -2459,6 +2489,24 @@ static int windows_clock_gettime(int clk_id, struct timespec *tp)
 }
 
 
+/*
+ * windows_hotplug_poll: called by libusb_get_device_list when in hotplug mode
+ * (i.e., when windows_backend.get_device_list is NULL). Iterates all active
+ * contexts and runs initial device scan to populate ctx->usb_devs.
+ */
+static void windows_hotplug_poll(void)
+{
+	struct libusb_context *ctx;
+
+	usbi_dbg("hotplug: windows_hotplug_poll called");
+	usbi_mutex_static_lock(&active_contexts_lock);
+	list_for_each_entry(ctx, &active_contexts_list, list, struct libusb_context) {
+		usbi_dbg("hotplug: polling ctx %p", ctx);
+		windows_initial_scan_devices(ctx);
+	}
+	usbi_mutex_static_unlock(&active_contexts_lock);
+}
+
 // NB: MSVC6 does not support named initializers.
 const struct usbi_os_backend windows_backend = {
 	"Windows",
@@ -2466,8 +2514,8 @@ const struct usbi_os_backend windows_backend = {
 	windows_init,
 	windows_exit,
 
-	windows_get_device_list,
-	NULL,				/* hotplug_poll */
+	NULL,				/* get_device_list (NULL to enable hotplug) */
+	windows_hotplug_poll,		/* hotplug_poll */
 	windows_open,
 	windows_close,
 
@@ -2889,6 +2937,13 @@ static int winusbx_configure_endpoints(int sub_api, struct libusb_device_handle 
 		if (!WinUSBX[sub_api].SetPipePolicy(winusb_handle, endpoint_address,
 			AUTO_CLEAR_STALL, sizeof(UCHAR), &policy)) {
 			usbi_dbg("failed to enable AUTO_CLEAR_STALL for endpoint %02X", endpoint_address);
+		}
+		/* RAW_IO enables multiple outstanding ReadPipes on the endpoint,
+		 * which is critical for high-throughput streaming (e.g. fx2lafw 24MHz).
+		 * Failure is non-fatal: falls back to single outstanding ReadPipe mode. */
+		if (!WinUSBX[sub_api].SetPipePolicy(winusb_handle, endpoint_address,
+			RAW_IO, sizeof(UCHAR), &policy)) {
+			usbi_dbg("failed to enable RAW_IO for endpoint %02X", endpoint_address);
 		}
 	}
 

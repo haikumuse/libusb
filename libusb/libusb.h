@@ -1305,6 +1305,21 @@ int LIBUSB_CALL libusb_init(libusb_context **ctx);
 void LIBUSB_CALL libusb_exit(libusb_context *ctx);
 void LIBUSB_CALL libusb_set_debug(libusb_context *ctx, int level);
 const struct libusb_version * LIBUSB_CALL libusb_get_version(void);
+
+/* Log callback mode flags (forward-compat with libusb 1.0.22).
+ * LIBUSB_LOG_CB_GLOBAL: register a process-wide global log callback that
+ * receives all libusb log messages. When set, the callback replaces the
+ * default output (OutputDebugStringW on Windows, stderr elsewhere). */
+#define LIBUSB_LOG_CB_GLOBAL 1
+
+/* Log callback function type. Receives the log level and a NUL-terminated
+ * string (already formatted with prefix/newline by libusb). The application
+ * can route this into its own logging system. ctx is reserved for future
+ * per-context callbacks (currently always NULL for global mode). */
+typedef void (*libusb_log_cb)(libusb_context *ctx, enum libusb_log_level level,
+	const char *str);
+
+void LIBUSB_CALL libusb_set_log_cb(libusb_context *ctx, libusb_log_cb cb, int mode);
 int LIBUSB_CALL libusb_has_capability(uint32_t capability);
 const char * LIBUSB_CALL libusb_error_name(int errcode);
 int LIBUSB_CALL libusb_setlocale(const char *locale);
