@@ -1910,6 +1910,27 @@ int API_EXPORTED libusb_set_auto_detach_kernel_driver(
 	return LIBUSB_SUCCESS;
 }
 
+/** \ingroup dev
+ * Control RAW_IO pipe policy on a bulk endpoint.
+ *
+ * See libusb.h for full documentation. On backends without a RAW_IO
+ * concept (Linux, macOS), this is a no-op returning LIBUSB_SUCCESS.
+ */
+int API_EXPORTED libusb_set_raw_io(libusb_device_handle *dev,
+	unsigned char endpoint, int enable)
+{
+	usbi_dbg("endpoint %02X enable=%d", endpoint, enable);
+
+	if (!dev->dev->attached)
+		return LIBUSB_ERROR_NO_DEVICE;
+
+	/* Optional hook: backends without RAW_IO (Linux/macOS) leave this NULL. */
+	if (!usbi_backend->set_raw_io)
+		return LIBUSB_SUCCESS;
+
+	return usbi_backend->set_raw_io(dev, endpoint, enable);
+}
+
 /** \ingroup lib
  * Set log message verbosity.
  *
@@ -2292,14 +2313,20 @@ void usbi_log_v(struct libusb_context *ctx, enum libusb_log_level level,
 			ctx_level = atoi(dbg);
 	}
 	global_debug = (ctx_level == LIBUSB_LOG_LEVEL_DEBUG);
-	if (!ctx_level)
-		return;
-	if (level == LIBUSB_LOG_LEVEL_WARNING && ctx_level < LIBUSB_LOG_LEVEL_WARNING)
-		return;
-	if (level == LIBUSB_LOG_LEVEL_INFO && ctx_level < LIBUSB_LOG_LEVEL_INFO)
-		return;
-	if (level == LIBUSB_LOG_LEVEL_DEBUG && ctx_level < LIBUSB_LOG_LEVEL_DEBUG)
-		return;
+	/* NONE (0) suppresses everything except ERROR: critical failures like
+	 * SetPipePolicy failures, transfer errors, etc. should still surface
+	 * even when verbose logging is off. WARNING/INFO/DEBUG follow ctx_level. */
+	if (ctx_level == LIBUSB_LOG_LEVEL_NONE) {
+		if (level != LIBUSB_LOG_LEVEL_ERROR)
+			return;
+	} else {
+		if (level == LIBUSB_LOG_LEVEL_WARNING && ctx_level < LIBUSB_LOG_LEVEL_WARNING)
+			return;
+		if (level == LIBUSB_LOG_LEVEL_INFO && ctx_level < LIBUSB_LOG_LEVEL_INFO)
+			return;
+		if (level == LIBUSB_LOG_LEVEL_DEBUG && ctx_level < LIBUSB_LOG_LEVEL_DEBUG)
+			return;
+	}
 #endif
 
 	usbi_gettimeofday(&now, NULL);

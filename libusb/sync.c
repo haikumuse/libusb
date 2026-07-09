@@ -38,7 +38,6 @@ static void LIBUSB_CALL sync_transfer_cb(struct libusb_transfer *transfer)
 {
 	int *completed = transfer->user_data;
 	*completed = 1;
-	usbi_dbg("actual_length=%d", transfer->actual_length);
 	/* caller interprets result and frees transfer */
 }
 
@@ -204,6 +203,7 @@ static int do_sync_bulk_transfer(struct libusb_device_handle *dev_handle,
 		usbi_warn(HANDLE_CTX(dev_handle),
 			"unrecognised status code %d", transfer->status);
 		r = LIBUSB_ERROR_OTHER;
+		break;
 	}
 
 	libusb_free_transfer(transfer);

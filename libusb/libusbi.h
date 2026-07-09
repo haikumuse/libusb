@@ -971,6 +971,19 @@ struct usbi_os_backend {
 	int (*attach_kernel_driver)(struct libusb_device_handle *handle,
 		int interface_number);
 
+	/* Control RAW_IO pipe policy on a bulk endpoint. Optional.
+	 *
+	 * On backends without a RAW_IO concept (Linux, macOS), this hook may
+	 * be NULL — libusb_set_raw_io() returns LIBUSB_SUCCESS in that case.
+	 *
+	 * Return:
+	 * - LIBUSB_SUCCESS on success
+	 * - LIBUSB_ERROR_NOT_SUPPORTED if the backend cannot control RAW_IO
+	 * - another LIBUSB_ERROR code on failure
+	 */
+	int (*set_raw_io)(struct libusb_device_handle *handle,
+		unsigned char endpoint, int enable);
+
 	/* Destroy a device. Optional.
 	 *
 	 * This function is called when the last reference to a device is

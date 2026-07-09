@@ -79,13 +79,17 @@ add_library(usb-1.0 STATIC
 
 # event-abstraction-v4 uses OS_WINDOWS (not PLATFORM_WINDOWS) to gate the
 # Windows backend. HAVE_CONFIG_H pulls in the generated config.h.
+# ENABLE_LOGGING keeps usbi_dbg/usbi_err/etc macros active so libusb_set_debug
+# can control verbosity at runtime (LIBUSB_LOG_LEVEL_NONE in sigsession.cpp).
+# DO NOT define ENABLE_DEBUG_LOGGING: it forces ctx->debug=DEBUG on context
+# creation and bypasses the level filter in usbi_log_v, making
+# libusb_set_debug(NULL, NONE) a no-op (floods PXView.log with libusb-dbg).
 target_compile_definitions(usb-1.0 PRIVATE
 	$<$<PLATFORM_ID:Windows>:
 		HAVE_CONFIG_H=1
 		OS_WINDOWS=1
 		HAVE_OS_TIMER=1
 		ENABLE_LOGGING=1
-		ENABLE_DEBUG_LOGGING=1
 		DEFAULT_VISIBILITY=
 		_LIBUSB_INTERNAL=1
 	>

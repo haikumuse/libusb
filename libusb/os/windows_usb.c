@@ -58,6 +58,10 @@ static void winusbx_close(int sub_api, struct libusb_device_handle *dev_handle);
 static int winusbx_configure_endpoints(int sub_api, struct libusb_device_handle *dev_handle, int iface);
 static int winusbx_claim_interface(int sub_api, struct libusb_device_handle *dev_handle, int iface);
 static int winusbx_release_interface(int sub_api, struct libusb_device_handle *dev_handle, int iface);
+/* Forward declaration: windows_set_raw_io() needs interface_by_endpoint()
+ * which is defined later in this file. */
+static int interface_by_endpoint(struct windows_device_priv *priv,
+	struct windows_device_handle_priv *handle_priv, uint8_t endpoint_address);
 static int winusbx_submit_control_transfer(int sub_api, struct usbi_transfer *itransfer);
 static int winusbx_set_interface_altsetting(int sub_api, struct libusb_device_handle *dev_handle, int iface, int altsetting);
 static int winusbx_submit_bulk_transfer(int sub_api, struct usbi_transfer *itransfer);
@@ -2159,6 +2163,53 @@ static int windows_detach_kernel_driver(struct libusb_device_handle *dev_handle,
 	return LIBUSB_ERROR_NOT_SUPPORTED;
 }
 
+/* Enable or disable RAW_IO pipe policy on a bulk endpoint. Called by
+ * libusb_set_raw_io(). Finds the interface that owns the endpoint, then
+ * calls WinUsb_SetPipePolicy(RAW_IO, ...) on the corresponding WinUSB
+ * handle. RAW_IO allows multiple outstanding ReadPipes, improving
+ * throughput for streaming acquisitions, but requires buffer lengths
+ * to be multiples of the endpoint max packet size — so drivers must
+ * disable it during small register accesses. */
+static int windows_set_raw_io(struct libusb_device_handle *dev_handle,
+	unsigned char endpoint, int enable)
+{
+	struct windows_device_handle_priv *handle_priv = _device_handle_priv(dev_handle);
+	struct windows_device_priv *priv = _device_priv(dev_handle->dev);
+	struct libusb_context *ctx = DEVICE_CTX(dev_handle->dev);
+	int current_interface;
+	HANDLE winusb_handle;
+	UCHAR policy;
+	int sub_api;
+	BOOL ok;
+
+	current_interface = interface_by_endpoint(priv, handle_priv, endpoint);
+	if (current_interface < 0) {
+		usbi_err(ctx, "set_raw_io: no interface matches endpoint %02X", endpoint);
+		return LIBUSB_ERROR_NOT_FOUND;
+	}
+
+	winusb_handle = handle_priv->interface_handle[current_interface].api_handle;
+	if (winusb_handle == 0 || winusb_handle == INVALID_HANDLE_VALUE) {
+		usbi_err(ctx, "set_raw_io: interface %d not claimed", current_interface);
+		return LIBUSB_ERROR_NOT_FOUND;
+	}
+
+	sub_api = priv->usb_interface[current_interface].apib->id;
+	CHECK_WINUSBX_AVAILABLE(sub_api);
+
+	policy = enable ? 1 : 0;
+	ok = WinUSBX[sub_api].SetPipePolicy(winusb_handle, endpoint,
+		RAW_IO, sizeof(UCHAR), &policy);
+	if (!ok) {
+		usbi_err(ctx, "set_raw_io: SetPipePolicy(RAW_IO=%d) failed for endpoint %02X: errno=%lu",
+			enable, endpoint, GetLastError());
+		return LIBUSB_ERROR_IO;
+	}
+
+	usbi_dbg("set_raw_io: endpoint %02X RAW_IO=%d (interface %d)", endpoint, enable, current_interface);
+	return LIBUSB_SUCCESS;
+}
+
 static void windows_destroy_device(struct libusb_device *dev)
 {
 	windows_device_priv_release(dev);
@@ -2539,6 +2590,7 @@ const struct usbi_os_backend windows_backend = {
 	windows_kernel_driver_active,
 	windows_detach_kernel_driver,
 	windows_attach_kernel_driver,
+	windows_set_raw_io,
 
 	windows_destroy_device,
 
@@ -2938,12 +2990,21 @@ static int winusbx_configure_endpoints(int sub_api, struct libusb_device_handle 
 			AUTO_CLEAR_STALL, sizeof(UCHAR), &policy)) {
 			usbi_dbg("failed to enable AUTO_CLEAR_STALL for endpoint %02X", endpoint_address);
 		}
-		/* RAW_IO enables multiple outstanding ReadPipes on the endpoint,
-		 * which is critical for high-throughput streaming (e.g. fx2lafw 24MHz).
-		 * Failure is non-fatal: falls back to single outstanding ReadPipe mode. */
+		/* RAW_IO default is FALSE (WinUSB native default). RAW_IO=TRUE allows
+		 * multiple outstanding ReadPipes for high-throughput streaming (e.g.
+		 * fx2lafw 24MHz) but requires buffer lengths to be multiples of the
+		 * endpoint max packet size — so 16-byte register reads fail.
+		 * Drivers that need RAW_IO (e.g. fx2lafw) must explicitly call
+		 * libusb_set_raw_io(devhdl, ep, 1) after dev_open. Drivers with
+		 * small register accesses (e.g. PXLogic) get RAW_IO=FALSE here and
+		 * do not need to disable it. Setting RAW_IO=TRUE then FALSE via the
+		 * API does not fully revert the pipe on some WinUSB versions, so
+		 * the default must be FALSE to avoid ERROR_INVALID_FUNCTION on the
+		 * first small read. */
+		policy = false;
 		if (!WinUSBX[sub_api].SetPipePolicy(winusb_handle, endpoint_address,
 			RAW_IO, sizeof(UCHAR), &policy)) {
-			usbi_dbg("failed to enable RAW_IO for endpoint %02X", endpoint_address);
+			usbi_dbg("failed to disable RAW_IO for endpoint %02X", endpoint_address);
 		}
 	}
 
@@ -3234,6 +3295,11 @@ static int winusbx_submit_bulk_transfer(int sub_api, struct usbi_transfer *itran
 	usbi_dbg("matched endpoint %02X with interface %d", transfer->endpoint, current_interface);
 
 	winusb_handle = handle_priv->interface_handle[current_interface].api_handle;
+
+	if (winusb_handle == 0 || winusb_handle == INVALID_HANDLE_VALUE) {
+		usbi_err(ctx, "winusbx_submit_bulk: winusb_handle is INVALID, aborting");
+		return LIBUSB_ERROR_NOT_FOUND;
+	}
 
 	r = prepare_transfer_priv(itransfer, winusb_handle);
 	if (r)

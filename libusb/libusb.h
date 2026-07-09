@@ -1417,6 +1417,30 @@ int LIBUSB_CALL libusb_attach_kernel_driver(libusb_device_handle *dev,
 int LIBUSB_CALL libusb_set_auto_detach_kernel_driver(
 	libusb_device_handle *dev, int enable);
 
+/** \ingroup dev
+ * Enable or disable RAW_IO pipe policy on a bulk endpoint.
+ *
+ * RAW_IO allows multiple outstanding ReadPipes on the same endpoint,
+ * improving throughput for high-bandwidth streaming transfers. Drivers
+ * that mix small register accesses (e.g. 16-byte bulk transfers) with
+ * large data transfers should disable RAW_IO during register access and
+ * enable it only for the data acquisition phase, because RAW_IO requires
+ * buffer lengths to be multiples of the endpoint's max packet size.
+ *
+ * On backends without a RAW_IO concept (Linux, macOS), this function
+ * is a no-op and returns LIBUSB_SUCCESS.
+ *
+ * \param dev a device handle
+ * \param endpoint the endpoint address (direction bit is ignored)
+ * \param enable non-zero to enable RAW_IO, zero to disable
+ * \returns LIBUSB_SUCCESS on success (including no-op backends)
+ * \returns LIBUSB_ERROR_NOT_SUPPORTED if the backend cannot control RAW_IO
+ * \returns another LIBUSB_ERROR code on failure
+ * \since v1.0.21
+ */
+int LIBUSB_CALL libusb_set_raw_io(libusb_device_handle *dev,
+	unsigned char endpoint, int enable);
+
 /* async I/O */
 
 /** \ingroup asyncio
