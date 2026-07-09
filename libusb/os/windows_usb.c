@@ -2990,21 +2990,20 @@ static int winusbx_configure_endpoints(int sub_api, struct libusb_device_handle 
 			AUTO_CLEAR_STALL, sizeof(UCHAR), &policy)) {
 			usbi_dbg("failed to enable AUTO_CLEAR_STALL for endpoint %02X", endpoint_address);
 		}
-		/* RAW_IO default is FALSE (WinUSB native default). RAW_IO=TRUE allows
-		 * multiple outstanding ReadPipes for high-throughput streaming (e.g.
-		 * fx2lafw 24MHz) but requires buffer lengths to be multiples of the
-		 * endpoint max packet size — so 16-byte register reads fail.
-		 * Drivers that need RAW_IO (e.g. fx2lafw) must explicitly call
-		 * libusb_set_raw_io(devhdl, ep, 1) after dev_open. Drivers with
-		 * small register accesses (e.g. PXLogic) get RAW_IO=FALSE here and
-		 * do not need to disable it. Setting RAW_IO=TRUE then FALSE via the
-		 * API does not fully revert the pipe on some WinUSB versions, so
-		 * the default must be FALSE to avoid ERROR_INVALID_FUNCTION on the
-		 * first small read. */
-		policy = false;
+		/* RAW_IO default is TRUE. RAW_IO allows multiple outstanding
+		 * ReadPipes for high-throughput streaming (e.g. fx2lafw 24MHz
+		 * multi-transfer pipeline) but requires buffer lengths to be
+		 * multiples of the endpoint max packet size — so 16-byte register
+		 * reads fail. Drivers with small register accesses (e.g. PXLogic)
+		 * must explicitly call libusb_set_raw_io(devhdl, ep, 0) after
+		 * dev_open. WinUSB SetPipePolicy(RAW_IO) is a synchronous,
+		 * immediate-effect pipe policy, and configure_endpoints runs
+		 * before any transfer is submitted, so the TRUE→FALSE transition
+		 * here is clean (no in-flight reads to disturb). */
+		policy = true;
 		if (!WinUSBX[sub_api].SetPipePolicy(winusb_handle, endpoint_address,
 			RAW_IO, sizeof(UCHAR), &policy)) {
-			usbi_dbg("failed to disable RAW_IO for endpoint %02X", endpoint_address);
+			usbi_dbg("failed to enable RAW_IO for endpoint %02X", endpoint_address);
 		}
 	}
 
