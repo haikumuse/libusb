@@ -1216,6 +1216,7 @@ int API_EXPORTED libusb_open(libusb_device *dev,
 
 	_handle->dev = libusb_ref_device(dev);
 	_handle->auto_detach_kernel_driver = 0;
+	_handle->raw_io_default = 1; /* RAW_IO enabled by default for streaming */
 	_handle->claimed_interfaces = 0;
 	memset(&_handle->os_priv, 0, priv_size);
 
@@ -1929,6 +1930,34 @@ int API_EXPORTED libusb_set_raw_io(libusb_device_handle *dev,
 		return LIBUSB_SUCCESS;
 
 	return usbi_backend->set_raw_io(dev, endpoint, enable);
+}
+
+/** \ingroup dev
+ * Set the default RAW_IO pipe policy for bulk endpoints claimed on this handle.
+ *
+ * This must be called BEFORE libusb_claim_interface(): the value is consulted
+ * inside winusbx_configure_endpoints() to decide whether RAW_IO is enabled
+ * (1, the historical default) or left disabled (0, the WinUSB native default)
+ * when each bulk endpoint is first configured.
+ *
+ * Drivers that do small register reads (e.g. PXLogic's 16-byte accesses) must
+ * call this with enable=0 before claiming, because the WinUSB TRUE→FALSE
+ * transition (via libusb_set_raw_io after claim) is unreliable on some
+ * devices. Drivers relying on streaming concurrency (fx2lafw) leave the default
+ * (1) untouched.
+ *
+ * On backends without a RAW_IO concept (Linux, macOS), this is a no-op.
+ *
+ * \param dev a device handle
+ * \param enable non-zero to enable RAW_IO by default (default), zero to disable
+ * \returns LIBUSB_SUCCESS
+ * \since v1.0.21
+ */
+int API_EXPORTED libusb_set_raw_io_default(libusb_device_handle *dev, int enable)
+{
+	usbi_dbg("raw_io_default=%d", enable);
+	dev->raw_io_default = enable;
+	return LIBUSB_SUCCESS;
 }
 
 /** \ingroup lib

@@ -367,6 +367,13 @@ struct libusb_device_handle {
 	struct list_head list;
 	struct libusb_device *dev;
 	int auto_detach_kernel_driver;
+	/* Default RAW_IO policy applied to bulk endpoints when an interface
+	 * is claimed (winusbx_configure_endpoints). 1 = enable RAW_IO (the
+	 * historical libusb default, required by streaming drivers like
+	 * fx2lafw); 0 = leave RAW_IO disabled (WinUSB native default, needed
+	 * by drivers that do small register reads, e.g. PXLogic). Set via
+	 * libusb_set_raw_io_default() BEFORE claiming an interface. */
+	int raw_io_default;
 	unsigned char os_priv
 #if defined(__STDC_VERSION__) && (__STDC_VERSION__ >= 199901L)
 	[] /* valid C99 code */

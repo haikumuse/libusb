@@ -2990,21 +2990,19 @@ static int winusbx_configure_endpoints(int sub_api, struct libusb_device_handle 
 			AUTO_CLEAR_STALL, sizeof(UCHAR), &policy)) {
 			usbi_dbg("failed to enable AUTO_CLEAR_STALL for endpoint %02X", endpoint_address);
 		}
-		/* RAW_IO default is TRUE to support high-throughput streaming
-		 * drivers (fx2lafw, kingst-la2016) that submit multiple concurrent
-		 * bulk IN ReadPipes. RAW_IO requires buffer lengths to be multiples
-		 * of the endpoint max packet size.
+		/* RAW_IO policy: consult dev_handle->raw_io_default (set via
+		 * libusb_set_raw_io_default() BEFORE claiming). Default is 1
+		 * (enabled) for streaming drivers (fx2lafw). PXLogic sets it
+		 * to 0 before claiming so its 16-byte register reads work
+		 * without an unreliable TRUE→FALSE transition.
 		 *
-		 * Drivers with small register accesses (e.g. PXLogic's 16-byte
-		 * register reads on ep 0x81) must call libusb_set_raw_io(devhdl,
-		 * ep, 0) to disable it. The TRUE→FALSE transition is handled
-		 * safely inside windows_set_raw_io() (which calls ResetPipe to
-		 * clear stale pipe state after the policy change). */
+		 * Only IN bulk endpoints use RAW_IO (it controls ReadPipe
+		 * concurrency). */
 		if (endpoint_address & LIBUSB_ENDPOINT_IN) {
-			policy = true;
+			policy = dev_handle->raw_io_default ? true : false;
 			if (!WinUSBX[sub_api].SetPipePolicy(winusb_handle, endpoint_address,
 				RAW_IO, sizeof(UCHAR), &policy)) {
-				usbi_dbg("failed to enable RAW_IO for endpoint %02X", endpoint_address);
+				usbi_dbg("failed to set RAW_IO=%d for endpoint %02X", policy, endpoint_address);
 			}
 		}
 	}

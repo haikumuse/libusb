@@ -1441,6 +1441,25 @@ int LIBUSB_CALL libusb_set_auto_detach_kernel_driver(
 int LIBUSB_CALL libusb_set_raw_io(libusb_device_handle *dev,
 	unsigned char endpoint, int enable);
 
+/** \ingroup dev
+ * Set the default RAW_IO pipe policy for bulk endpoints claimed on this handle.
+ *
+ * Must be called BEFORE libusb_claim_interface(). When enable=0, bulk
+ * endpoints are left with RAW_IO disabled (WinUSB native default), avoiding
+ * the unreliable TRUE→FALSE transition that libusb_set_raw_io() performs
+ * after claiming. Drivers that need small register reads (e.g. PXLogic)
+ * call this with enable=0 before claiming; streaming drivers leave the
+ * default (1) untouched.
+ *
+ * On backends without a RAW_IO concept (Linux, macOS), this is a no-op.
+ *
+ * \param dev a device handle
+ * \param enable non-zero to enable RAW_IO by default, zero to disable
+ * \returns LIBUSB_SUCCESS
+ * \since v1.0.21
+ */
+int LIBUSB_CALL libusb_set_raw_io_default(libusb_device_handle *dev, int enable);
+
 /* async I/O */
 
 /** \ingroup asyncio
