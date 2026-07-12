@@ -8,7 +8,7 @@ LINUX_USBFS_SRC = os/linux_usbfs.c
 DARWIN_USB_SRC = os/darwin_usb.c
 OPENBSD_USB_SRC = os/openbsd_usb.c
 NETBSD_USB_SRC = os/netbsd_usb.c
-WINDOWS_USB_SRC = os/windows_usb.c libusb-1.0.rc libusb-1.0.def
+WINDOWS_USB_SRC = os/windows_usb.c os/windows_hotplug.c libusb-1.0.rc libusb-1.0.def
 WINCE_USB_SRC = os/wince_usb.c os/wince_usb.h
 
 DIST_SUBDIRS = 

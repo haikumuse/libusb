@@ -761,11 +761,24 @@ static int windows_assign_endpoints(struct libusb_device_handle *dev_handle, int
 		return r;
 	}
 
+	if (iface >= conf_desc->bNumInterfaces) {
+		usbi_dbg("interface %d is not a physical USB interface, skipping endpoint assignment", iface);
+		libusb_free_config_descriptor(conf_desc);
+		return LIBUSB_SUCCESS;
+	}
+
+	if (altsetting >= conf_desc->interface[iface].num_altsetting) {
+		usbi_dbg("altsetting %d for interface %d is not found, skipping endpoint assignment", altsetting, iface);
+		libusb_free_config_descriptor(conf_desc);
+		return LIBUSB_SUCCESS;
+	}
+
 	if_desc = &conf_desc->interface[iface].altsetting[altsetting];
 	safe_free(priv->usb_interface[iface].endpoint);
 
 	if (if_desc->bNumEndpoints == 0) {
 		usbi_dbg("no endpoints found for interface %d", iface);
+		libusb_free_config_descriptor(conf_desc);
 		return LIBUSB_SUCCESS;
 	}
 
